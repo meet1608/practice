@@ -9,11 +9,28 @@ const sendEmail = require("../utiles/sendEmail");
 router.post("/signup", async (req, res) => {
   const { email, name, password } = req.body;
   const userExists = await User.findOne({ email });
-  if (userExists) return res.status(400).json({ Error: "User already exists" });
 
-  const hashedPassword = await bcrypt.hash(password, 10);
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
+  const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+
+  if (userExists) {
+    if (userExists.isVerified) {
+      return res.status(400).json({ Error: "User already verified" });
+    } else {
+      // ✅ Update OTP & expiry for unverified user
+      userExists.otp = otp;
+      userExists.otpExpiry = otpExpiry;
+      await userExists.save();
+      await sendEmail(email, "Verify your email with OTP", `Your OTP is ${otp}`);
+      return res.status(200).json({
+        message: "OTP re-sent to your email",
+        user: { id: userExists._id, email: userExists.email, name: userExists.name },
+      });
+    }
+  }
+
+  // ✅ New user creation
+  const hashedPassword = await bcrypt.hash(password, 10);
 
   const user = new User({
     email,
@@ -21,17 +38,18 @@ router.post("/signup", async (req, res) => {
     password: hashedPassword,
     otp,
     otpExpiry,
+    isVerified: false,
   });
+
   await user.save();
   await sendEmail(email, "Verify your email with OTP", `Your OTP is ${otp}`);
 
-  res
-    .status(201)
-    .json({
-      message: "otp sent to your email",
-      user: { id: user._id, email: user.email, name: user.name },
-    });
+  res.status(201).json({
+    message: "OTP sent to your email",
+    user: { id: user._id, email: user.email, name: user.name },
+  });
 });
+
 
 //login
 router.get("/login", async (req, res) => {
@@ -49,20 +67,18 @@ router.get("/login", async (req, res) => {
   const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
     expiresIn: "1h",
   });
-  res
-    .status(200)
-    .json({
-      token,
-      user: { id: user._id, email: user.email, name: user.name },
-    });
+  res.status(200).json({
+    token,
+    user: { id: user._id, email: user.email, name: user.name },
+  });
 });
 
-router.delete("/delete", async (req, res) => {
-  const { email } = req.body;
-  const user = await User.findOne({ email });
+router.delete("/delete/:id", async (req, res) => {
+//   const { email } = req.body;
+  const user = await User.findById(req.params.id );
   if (!user) return res.status(400).json({ error: "User not found" });
   else {
-    await User.deleteOne({ email });
+    await User.deleteOne({ _id: req.params.id });
     res.status(200).json({ message: "User deleted successfully" });
   }
 });
@@ -85,9 +101,9 @@ router.get("/users", async (req, res) => {
 });
 
 router.post("/verify-otp/:id", async (req, res) => {
-//   req.body = (req.body);
-  const {  otp } = req.body;
-  const user = await User.findById( req.params.id );
+  //   req.body = (req.body);
+  const { otp } = req.body;
+  const user = await User.findById(req.params.id);
 
   if (!user) return res.status(400).json({ error: "User not found" });
   if (user.otp !== otp) return res.status(400).json({ error: "Invalid OTP" });
